@@ -19,6 +19,9 @@ class HookTest {
     var input = input(source);
 
     assertEquals(source, Hook.file(input));
+    // A long path full of escapes must not overflow the stack of the regular expression.
+    var deep = "{\"tool_input\":{\"file_path\":\"/a" + "\\/b".repeat(50_000) + "\"}}";
+    assertEquals(Path.of("/a" + "/b".repeat(50_000)), Hook.file(deep));
     assertEquals(module, Hook.module(source));
     // Outside the sources, as a build output or the README, nothing runs.
     assertNull(Hook.module(module.resolve("target/classes/shop/Cart.class")));

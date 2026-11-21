@@ -20,7 +20,8 @@ import java.util.regex.Pattern;
 final class Hook {
 
   private static final Pattern FILE =
-      Pattern.compile("\"file_path\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+      // Unrolled and possessive: an input holds whole files, which an alternation would recurse on.
+      Pattern.compile("\"file_path\"\\s*:\\s*\"([^\"\\\\]*+(?:\\\\.[^\"\\\\]*+)*+)\"");
 
   private Hook() {}
 
