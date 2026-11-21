@@ -33,6 +33,8 @@
           <argLine>-Xmx256m @{late}</argLine>
           <systemPropertyVariables>
             <cache>${project.build.directory}/cache</cache>
+            <!-- Surefire replaces @{…} only in the argLine. -->
+            <literal>@{late}</literal>
           </systemPropertyVariables>
         </configuration>
       </plugin>

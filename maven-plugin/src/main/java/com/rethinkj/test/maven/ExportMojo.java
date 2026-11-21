@@ -90,7 +90,7 @@ public class ExportMojo extends AbstractMojo {
     values.put("poms", join(poms()));
     var release = value(configuration(COMPILER, "default-compile"), "release");
     if (release == null) {
-      release = project.getProperties().getProperty("maven.compiler.release");
+      release = evaluate("${maven.compiler.release}");
     }
     if (release != null) {
       values.put("release", release);
@@ -98,10 +98,10 @@ public class ExportMojo extends AbstractMojo {
     var surefire = configuration(SUREFIRE, "default-test");
     var argLine = value(surefire, "argLine");
     if (argLine == null) {
-      argLine = project.getProperties().getProperty("argLine");
+      argLine = evaluate("${argLine}");
     }
     if (argLine != null) {
-      values.put("jvm.args", argLine);
+      values.put("jvm.args", late(argLine));
     }
     var properties = surefire == null ? null : surefire.getChild("systemPropertyVariables");
     if (properties != null) {
@@ -111,6 +111,12 @@ public class ExportMojo extends AbstractMojo {
           values.put("system." + property.getName(), text);
         }
       }
+    }
+    // As Surefire does by default: properties given to Maven with -D win over the configuration.
+    if (!"false".equals(value(surefire, "promoteUserPropertiesToSystemProperties"))) {
+      session
+          .getUserProperties()
+          .forEach((name, value) -> values.put("system." + name, value.toString()));
     }
     values.put("launcher", launcher());
     write(values);
@@ -179,24 +185,33 @@ public class ExportMojo extends AbstractMojo {
     return child == null ? null : evaluate(child.getValue());
   }
 
-  /** A value as the plugin gets it: with {@code ${…}} and Surefire's {@code @{…}} replaced. */
+  /** A value as the plugin gets it, with Maven's {@code ${…}} replaced; null when unset. */
   private String evaluate(String text) throws MojoExecutionException {
     if (text == null) {
       return null;
     }
-    Object value;
     try {
-      value = new PluginParameterExpressionEvaluator(session, execution).evaluate(text);
+      var value = new PluginParameterExpressionEvaluator(session, execution).evaluate(text);
+      return value == null ? null : value.toString().strip();
     } catch (ExpressionEvaluationException e) {
       throw new MojoExecutionException("Cannot evaluate " + text, e);
     }
-    if (value == null) {
-      return null;
-    }
-    Matcher late = LATE.matcher(value.toString());
+  }
+
+  /**
+   * Replaces Surefire's late properties, {@code @{…}}, in an {@code argLine}, as Surefire does
+   * when the tests start. The export runs no lifecycle phase, so a property that a goal of one sets,
+   * such as JaCoCo's {@code prepare-agent} in {@code initialize}, is empty here: the runner's JVM
+   * starts without what that goal adds.
+   */
+  private String late(String argLine) {
+    Matcher late = LATE.matcher(argLine);
     var result = new StringBuilder();
     while (late.find()) {
-      var replacement = project.getProperties().getProperty(late.group(1), "");
+      var name = late.group(1);
+      var replacement = session
+          .getUserProperties()
+          .getProperty(name, project.getProperties().getProperty(name, ""));
       late.appendReplacement(result, Matcher.quoteReplacement(replacement));
     }
     late.appendTail(result);
