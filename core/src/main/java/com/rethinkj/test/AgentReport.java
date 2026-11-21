@@ -8,8 +8,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -48,19 +50,6 @@ public final class AgentReport implements TestExecutionListener {
   /** The most stack frames a failure carries. */
   static final int FRAME_LIMIT = 20;
 
-  /** Frames of these packages are left out: they are the JDK, JUnit and the build tool's. */
-  private static final List<String> FRAMEWORK = List.of(
-      "java.",
-      "javax.",
-      "jdk.",
-      "sun.",
-      "com.sun.",
-      "org.junit.",
-      "org.opentest4j.",
-      "org.apache.maven.surefire.",
-      "org.assertj.core.",
-      "org.hamcrest.");
-
   /** The files written in this JVM: a second run into the same file appends to it. */
   private static final Set<Path> STARTED = new HashSet<>();
 
@@ -72,6 +61,7 @@ public final class AgentReport implements TestExecutionListener {
   private int aborted;
   private int skipped;
   private final Map<String, StringBuilder> output = new HashMap<>();
+  private final Set<String> counted = new HashSet<>();
 
   @Override
   public synchronized void testPlanExecutionStarted(TestPlan testPlan) {
@@ -83,6 +73,7 @@ public final class AgentReport implements TestExecutionListener {
     startedAt = System.nanoTime();
     passed = failed = aborted = skipped = 0;
     output.clear();
+    counted.clear();
     var path = Path.of(file.get()).toAbsolutePath().normalize();
     try {
       Files.createDirectories(path.getParent());
@@ -110,7 +101,11 @@ public final class AgentReport implements TestExecutionListener {
     for (var key : List.of("stdout", "stderr")) {
       var text = entry.getKeyValuePairs().get(key);
       if (text != null) {
-        output.computeIfAbsent(test.getUniqueId(), id -> new StringBuilder()).append(text);
+        var kept = output
+            .computeIfAbsent(test.getUniqueId(), id -> new StringBuilder())
+            .append(text);
+        // One character more than the limit, so that the report still sees it was cut.
+        kept.delete(0, Math.max(0, kept.length() - OUTPUT_LIMIT - 1));
       }
     }
   }
@@ -129,11 +124,12 @@ public final class AgentReport implements TestExecutionListener {
       return;
     }
     switch (result.getStatus()) {
-      case SUCCESSFUL -> passed += test.isTest() ? 1 : 0;
-      // A class whose assumption fails in @BeforeAll aborts all of its tests.
+      case SUCCESSFUL -> passed += test.isTest() ? tests(test) : 0;
+      // A class whose assumption fails in @BeforeAll aborts those of its tests that did not run.
       case ABORTED -> aborted += tests(test);
       case FAILED -> {
         failed++;
+        tests(test);
         write(failure(test, result.getThrowable().orElse(null)));
       }
     }
@@ -203,8 +199,9 @@ public final class AgentReport implements TestExecutionListener {
               .map(frame -> frame.getClassName() + "." + frame.getMethodName() + "("
                   + frame.getFileName() + ":" + frame.getLineNumber() + ")")
               .toList());
+      var seen = Collections.<Throwable>newSetFromMap(new IdentityHashMap<>());
       var root = error;
-      while (root.getCause() != null && root.getCause() != root) {
+      while (seen.add(root) && root.getCause() != null && !seen.contains(root.getCause())) {
         root = root.getCause();
       }
       if (root != error) {
@@ -234,18 +231,29 @@ public final class AgentReport implements TestExecutionListener {
     return test.getUniqueId();
   }
 
-  /** The frames of the project's own code, from the top. */
+  /** The frames of the project's own code, from the top, at most {@link #FRAME_LIMIT}. */
   static List<StackTraceElement> ownFrames(Throwable error) {
     var frames = new ArrayList<StackTraceElement>();
     for (var frame : error.getStackTrace()) {
       if (frames.size() == FRAME_LIMIT) {
         break;
       }
-      if (FRAMEWORK.stream().noneMatch(frame.getClassName()::startsWith)) {
+      if (own(frame.getClassName())) {
         frames.add(frame);
       }
     }
     return frames;
+  }
+
+  /**
+   * Whether a class is the project's own: its class file is in a folder, such as Maven's
+   * {@code target/classes}. The JDK, JUnit, the build tool and libraries come from JARs.
+   */
+  static boolean own(String className) {
+    var loader = Thread.currentThread().getContextClassLoader();
+    var file = (loader != null ? loader : ClassLoader.getSystemClassLoader())
+        .getResource(className.replace('.', '/') + ".class");
+    return file != null && file.getProtocol().equals("file");
   }
 
   /** The source file of a frame relative to its source folder, and the line: {@code a/B.java:3}. */

@@ -39,7 +39,7 @@ Each line is one JSON object. A failure is written as it happens:
 
 - `test` runs it again: `mvn test -Dtest=com.example.VersionTest#ordersBySemVer`.
 - `at` is the first line of the project's own code in the stack, relative to its source folder.
-- `stack` holds only the project's own frames; frames of the JDK, JUnit, AssertJ, Hamcrest and Surefire are left out.
+- `stack` holds only the project's own frames, those of classes in a folder such as `target/classes`; frames of the JDK, JUnit, Surefire and other libraries, which come from JARs, are left out.
 - `expected` and `actual` are there when the assertion gives them, `cause` is the innermost cause, and `output` is the end of what the test printed when `junit.platform.output.capture.stdout` or `.stderr` is `true`.
 
 The last line counts the tests; when everything passes, it is the only line:
@@ -48,7 +48,7 @@ The last line counts the tests; when everything passes, it is the only line:
 {"v":1,"event":"summary","passed":2017,"failed":0,"aborted":97,"skipped":0,"ms":12573}
 ```
 
-`failed` also counts a test class whose setup failed. `aborted` counts tests whose assumption did not hold, `skipped` disabled tests. Within `"v":1`, fields are added, never renamed or removed.
+`failed` also counts a test class whose setup failed. The file is written anew by each test JVM: with Surefire's `forkCount` above 1 or `reuseForks=false`, it holds only the last one's tests. `aborted` counts tests whose assumption did not hold, `skipped` disabled tests. Within `"v":1`, fields are added, never renamed or removed.
 
 ## What it is meant to do
 

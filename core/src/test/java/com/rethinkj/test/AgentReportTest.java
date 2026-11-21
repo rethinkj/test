@@ -38,7 +38,9 @@ class AgentReportTest {
             + project.line("src/test/java/shop/CartTest.java", "// fails here") + "\"",
         "\"error\":\"org.opentest4j.AssertionFailedError\"",
         "\"expected\":\"30\",\"actual\":\"20\"",
-        "\"output\":\"adding 10 and 20\\n\"");
+        "\"output\":\"adding 10 and 20"
+            + System.lineSeparator().replace("\r", "\\r").replace("\n", "\\n")
+            + "\"");
     assertTrue(
         lines
             .get(2)
