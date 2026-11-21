@@ -45,8 +45,10 @@ final class Compilation {
    *
    * @param compiled how many source files were compiled
    * @param errors the compile errors; when there are some, the classes are not up to date
+   * @param anew whether everything was compiled and copied anew, as after a new export
+   * @param resourcesCopied whether resources were copied, because they changed or anew
    */
-  record Result(int compiled, List<Error> errors) {}
+  record Result(int compiled, List<Error> errors, boolean anew, boolean resourcesCopied) {}
 
   private static final Path STATE = Path.of("target", "rethinkj-test", "sources.properties");
 
@@ -106,7 +108,9 @@ final class Compilation {
 
     var resources = stamps(build.resources(), "");
     // Copied also after a new export, which can change how they are filtered.
-    if (!select(known, "res:").equals(resources) || (!initialized && !resources.isEmpty())) {
+    boolean copied =
+        !select(known, "res:").equals(resources) || (!initialized && !resources.isEmpty());
+    if (copied) {
       copyResources.run();
     }
     // After errors nothing is recorded: javac may have written some classes, so the next update
@@ -119,7 +123,7 @@ final class Compilation {
       now.clear();
     }
     save(state, now);
-    return new Result(compiled, errors);
+    return new Result(compiled, errors, !initialized, copied);
   }
 
   /**

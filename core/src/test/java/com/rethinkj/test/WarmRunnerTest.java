@@ -58,6 +58,83 @@ class WarmRunnerTest {
   }
 
   @Test
+  void runsOnlyTheTestClassesAChangeCanAffect(@TempDir Path project) throws IOException {
+    copy(Path.of("src/test/resources/projects/warm"), project);
+    // Test classes in the order of their names, so that InitTest initializes Settings and
+    // LazyFirstTest fills the cache of Lazy.
+    Files.createDirectories(project.resolve("target/test-classes"));
+    Files.writeString(
+        project.resolve("target/test-classes/junit-platform.properties"),
+        "junit.jupiter.testclass.order.default=org.junit.jupiter.api.ClassOrderer$ClassName\n");
+    var runner = new WarmRunner(build(project), () -> {});
+    assertSelection(
+        runner,
+        List.of(),
+        0,
+        "\"classes\":6,\"leftOut\":0,\"leftOutTests\":0,\"why\":[\"no record yet\"]");
+
+    edit(project, "src/main/java/greet/Counter.java", "++count", "count += 2");
+    var report = assertSelection(
+        runner,
+        List.of(),
+        1,
+        "\"classes\":1,\"leftOut\":5,\"leftOutTests\":7,\"why\":[\"changed greet.Counter\"]");
+    assertTrue(report.contains("\"test\":\"greet.CounterTest#countsFromOne\""), report);
+    assertSelection(
+        runner,
+        List.of(),
+        1,
+        "\"classes\":1,\"leftOut\":5,\"leftOutTests\":7,\"why\":[\"failed greet.CounterTest\"]");
+
+    // The class that failed runs again; a comment changes no bytecode but the lines, which the
+    // hashes leave out.
+    edit(project, "src/main/java/greet/Counter.java", "count += 2", "++count");
+    edit(
+        project,
+        "src/main/java/greet/Greeter.java",
+        "public class Greeter {",
+        "/** Greets. */\npublic class Greeter {");
+    assertSelection(
+        runner,
+        List.of(),
+        0,
+        "\"classes\":1,\"leftOut\":5,\"leftOutTests\":7,\"why\":[\"failed greet.CounterTest\"]");
+
+    // What a static initializer ran counts for every test class that uses its class, also one that
+    // did not initialize it.
+    edit(project, "src/main/java/greet/Source.java", "return 1;", "return 2;");
+    report = assertSelection(
+        runner,
+        List.of(),
+        1,
+        "\"classes\":4,\"leftOut\":2,\"leftOutTests\":4,\"why\":[\"changed greet.Source\"]");
+    assertTrue(report.contains("\"test\":\"greet.ValueTest#readsTheSetting\""), report);
+    // The same for a cache that an earlier test class filled.
+    assertTrue(report.contains("\"test\":\"greet.LazySecondTest#readsTheCache\""), report);
+
+    edit(project, "src/main/java/greet/Source.java", "return 2;", "return 1;");
+    assertSelection(
+        runner,
+        List.of("--all"),
+        0,
+        "\"classes\":6,\"leftOut\":0,\"leftOutTests\":0,\"why\":[\"--all\"]");
+    assertSelection(
+        runner,
+        List.of(),
+        0,
+        "\"classes\":0,\"leftOut\":6,\"leftOutTests\":8,\"why\":[\"nothing changed\"]");
+  }
+
+  /** Runs, checks the exit code and the selection line, and returns the report. */
+  private static String assertSelection(
+      WarmRunner runner, List<String> selectors, int code, String selection) throws IOException {
+    var report = new StringWriter();
+    assertEquals(code, runner.run(selectors, report), report.toString());
+    assertTrue(report.toString().contains(selection), report.toString());
+    return report.toString();
+  }
+
+  @Test
   void selectsTheClassesSurefireSelects() {
     assertTrue("com.example.CartTest".matches(WarmRunner.regex("**/*Test.*")));
     assertTrue("com.example.CartTest".matches(WarmRunner.regex("*Test.java")));

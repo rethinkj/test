@@ -8,7 +8,7 @@ A fast test runner for Java, built for the loop of a coding agent: edit, test, r
 
 ## Status
 
-The report for agents works, with `mvn test` and with the warm runner, which keeps a JVM per module between runs. Running only the tests a change affects comes next. It targets Maven projects on Windows 11 and Linux, with JDK 25; Gradle and Spring come later. The version is `0.1.0-SNAPSHOT` and is not published yet: `mvn install` puts it into the local repository.
+The report for agents works, with `mvn test` and with the warm runner, which keeps a JVM per module between runs and runs only the test classes a change can affect. Reporting on every edit comes next. It targets Maven projects on Windows 11 and Linux, with JDK 25; Gradle and Spring come later. The version is `0.1.0-SNAPSHOT` and is not published yet: `mvn install` puts it into the local repository.
 
 ## Warm runner
 
@@ -16,7 +16,8 @@ Install it with `mvn install` in this repository, then run it in the folder of a
 
 ```sh
 runner=~/.m2/repository/com/rethinkj/test/rethinkj-test-core/0.1.0-SNAPSHOT/rethinkj-test-core-0.1.0-SNAPSHOT.jar
-java -jar $runner                        # all tests of the module
+java -jar $runner                        # the test classes a change can affect
+java -jar $runner --all                  # all tests of the module
 java -jar $runner com.example.CartTest   # a class, a.BTest#method or a package
 java -jar $runner --fresh                # once, in a new JVM
 ```
@@ -24,6 +25,8 @@ java -jar $runner --fresh                # once, in a new JVM
 The first run asks Maven for the module's class path and test JVM options, compiles the module, and starts a JVM that stays running. After that, a run compiles only the files that changed and runs the tests in that JVM. A change that other classes compile against, such as a signature or a constant, compiles the module again. Changed resources are copied with Maven's `resources` goals. A change to a POM starts a new JVM.
 
 In rethinkj/ui, an edit to one class of `core` plus a run of its test takes 0.1 to 0.2 s this way. With `mvn test -Dtest=…` it takes 6.6 to 9.3 s.
+
+Without a selector it runs only the test classes that a change since their last run can affect. While a class runs, the runner records which of the module's classes run and which classes these name. It also records what ran in the static initializers of these classes, and in the test classes that wrote their static fields, as a cache that one test class fills for the next. A class is affected when one of the recorded classes now has other bytecode, or is gone. Comments and blank lines do not count. New test classes and those that failed the last time run too. All test classes run on the first run, after a new export or library, after a change to a resource, with parallel execution and with `--all`. A line before the report says how many test classes run, how many classes and tests are left out, and why, for example `{"v":1,"event":"selection","classes":3,"leftOut":93,"leftOutTests":512,"why":["changed com.example.Cart"]}`. Test classes that share caches depend on much of each other, so in a module like rethinkj/ui a change to a central class still runs most of them. CI should still run all tests, with `mvn test`.
 
 It prints the report below. Two more kinds of lines can appear: `{"v":1,"event":"compile-error","at":"src/main/java/com/example/Cart.java:12","message":"…"}` when the code does not compile, and `{"v":1,"event":"error",…}` when the run could not start. It exits with 0 when every test passed, 1 when one failed and 2 for those two cases.
 
