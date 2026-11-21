@@ -34,8 +34,8 @@ import org.eclipse.aether.resolution.ArtifactResolutionException;
 
 /**
  * Writes what the runner needs to know about a module to {@code
- * target/rethinkj-test/project.properties}: the test class path, the source and class folders,
- * the Java release, the options and system properties Surefire gives the test JVM, and the JUnit
+ * target/rethinkj-test/project.properties}: the test class path, the source, resource and class
+ * folders, the Java release, the options and system properties Surefire gives the test JVM, and the JUnit
  * Platform Launcher that matches the module's JUnit.
  *
  * <p>The values are those Maven computes for this build, with its profiles, so the runner reads
@@ -80,6 +80,12 @@ public class ExportMojo extends AbstractMojo {
     values.put("testClasses", project.getBuild().getTestOutputDirectory());
     values.put("sources", join(project.getCompileSourceRoots()));
     values.put("testSources", join(project.getTestCompileSourceRoots()));
+    values.put(
+        "resources",
+        join(project.getResources().stream().map(r -> r.getDirectory()).toList()));
+    values.put(
+        "testResources",
+        join(project.getTestResources().stream().map(r -> r.getDirectory()).toList()));
     values.put("workdir", project.getBasedir().getPath());
     values.put("poms", join(poms()));
     var release = value(configuration(COMPILER, "default-compile"), "release");
