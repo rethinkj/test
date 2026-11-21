@@ -50,7 +50,7 @@ public final class Main {
 
   static int run(List<String> args) throws Exception {
     var fresh = args.contains("--fresh");
-    var selectors = args.stream().filter(arg -> !arg.startsWith("--")).toList();
+    var selectors = args.stream().filter(arg -> !arg.equals("--fresh")).toList();
     var workdir = Path.of("").toAbsolutePath();
     var export = workdir.resolve(Build.EXPORT);
     if (!Files.exists(export) || Build.read(export).stale()) {

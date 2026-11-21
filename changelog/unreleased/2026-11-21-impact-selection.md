@@ -1,0 +1,1 @@
+- The warm runner now runs only the test classes a change since their last run can affect, and says which ones and why in a `selection` line; `--all` runs all of them.

@@ -153,7 +153,7 @@ record Build(
     } catch (java.net.URISyntaxException e) {
       throw new IOException(e);
     }
-    return Files.getLastModifiedTime(file).toMillis()
+    return (Files.exists(file) ? Files.getLastModifiedTime(file).toMillis() : 0)
         + "-"
         + Files.getLastModifiedTime(self).toMillis()
         + "-"
