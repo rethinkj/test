@@ -8,7 +8,7 @@ A fast test runner for Java, built for the loop of a coding agent: edit, test, r
 
 ## Status
 
-The report for agents works, with `mvn test` and with the warm runner, which keeps a JVM per module between runs and runs only the test classes a change can affect. Reporting on every edit comes next. It targets Maven projects on Windows 11 and Linux, with JDK 25; Gradle and Spring come later. The version is `0.1.0-SNAPSHOT` and is not published yet: `mvn install` puts it into the local repository.
+The report for agents works, with `mvn test` and with the warm runner, which keeps a JVM per module between runs and runs only the test classes a change can affect. With a hook it reports on every edit an agent makes. It targets Maven projects on Windows 11 and Linux, with JDK 25; Gradle and Spring come later. The version is `0.1.0-SNAPSHOT` and is not published yet: `mvn install` puts it into the local repository.
 
 ## Warm runner
 
@@ -33,6 +33,27 @@ It prints the report below. Two more kinds of lines can appear: `{"v":1,"event":
 The JVM ends after 30 minutes without a run, and it is replaced when the classes of earlier runs do not leave memory. Its output goes to `target/rethinkj-test/daemon.log`.
 
 Limits for now: tests run on the class path, also in a module with a `module-info.java`; sources are read as UTF-8; other modules of a multi-module build come from their JARs, as with `mvn -pl`; a module with annotation processors is refused; and a library that reads a resource through its own class finds its own copy before one of the module's tests.
+
+## Report on every edit
+
+With a hook, Claude Code gets the result of the affected tests after each edit, without a turn of its own to run them. Add this to `.claude/settings.json` of the project, with the path to the runner's JAR:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {"type": "command", "command": "java -jar <path to rethinkj-test-core.jar> --hook", "timeout": 120}
+        ]
+      }
+    ]
+  }
+}
+```
+
+After an edit of a file in a module's `src`, the hook runs what a run without selectors runs, in that module. When the tests pass it says nothing. When they fail or the code does not compile, Claude Code gets the report's lines with the edit, the way it gets a compile error. The hook never fails the edit itself.
 
 ## Report for agents
 
