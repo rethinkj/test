@@ -65,70 +65,112 @@ final class Compilation {
   }
 
   Result update() {
+    if (build.processors()) {
+      throw new IllegalStateException(
+          "The module runs annotation processors, which the runner does not yet: use mvn test");
+    }
     var state = build.workdir().resolve(STATE);
     var known = load(state);
-    var now = new TreeMap<String, String>();
+    // Another export, a library installed anew, or classes another build wrote: compile all.
+    var settings = settings();
+    if (!settings.equals(known.get("settings")) || !outputs().equals(known.get("outputs"))) {
+      known.clear();
+    }
+    boolean initialized = !known.isEmpty();
     var main = stamps(build.sources(), ".java");
     var test = stamps(build.testSources(), ".java");
     var errors = new ArrayList<Error>();
+    var now = new TreeMap<String, String>();
 
-    var mainSet = new SourceSet(build.sources(), build.classes(), classPath(false));
-    var mainChange = mainSet.update(main, select(known, "main:"), errors);
-    remember(now, "main:", main, known, mainChange, errors.isEmpty());
+    var mainSet = new SourceSet(
+        build.sources(),
+        build.classes(),
+        build.compileClassPath(),
+        build.release(),
+        build.parameters());
+    var mainChange = mainSet.update(main, initialized, select(known, "main:"), errors);
     int compiled = mainChange.compiled;
     if (errors.isEmpty()) {
-      var testSet = new SourceSet(build.testSources(), build.testClasses(), classPath(true));
-      var before = mainChange.apiChanged ? Map.<String, String>of() : select(known, "test:");
-      var testChange = testSet.update(test, before, errors);
-      remember(now, "test:", test, known, testChange, errors.isEmpty());
+      put(now, "main:", main);
+      var testSet = new SourceSet(
+          build.testSources(),
+          build.testClasses(),
+          testClassPath(),
+          build.testRelease(),
+          build.testParameters());
+      boolean testsKnown = initialized && !mainChange.apiChanged;
+      var testChange = testSet.update(test, testsKnown, select(known, "test:"), errors);
       compiled += testChange.compiled;
-    } else {
-      put(now, "test:", select(known, "test:"));
+      put(now, "test:", test);
     }
 
     var resources = stamps(build.resources(), "");
-    if (!select(known, "res:").equals(resources)) {
+    // Copied also after a new export, which can change how they are filtered.
+    if (!select(known, "res:").equals(resources) || (!initialized && !resources.isEmpty())) {
       copyResources.run();
     }
-    put(now, "res:", resources);
+    // After errors nothing is recorded: javac may have written some classes, so the next update
+    // compiles all of them.
+    if (errors.isEmpty()) {
+      put(now, "res:", resources);
+      now.put("settings", settings);
+      now.put("outputs", outputs());
+    } else {
+      now.clear();
+    }
     save(state, now);
     return new Result(compiled, errors);
   }
 
   /**
-   * Records the sources of a set as compiled. After errors it keeps what was known before, so that
-   * the next update compiles the same files again, or, when it had to compile all, nothing.
+   * The export and the libraries the classes were compiled with. Every export counts, also one
+   * that wrote the same file: a change to a POM can change how resources are filtered.
    */
-  private static void remember(
-      Map<String, String> now,
-      String prefix,
-      Map<String, String> sources,
-      Map<String, String> known,
-      Change change,
-      boolean compiled) {
-    if (compiled) {
-      put(now, prefix, sources);
-    } else if (!change.all) {
-      put(now, prefix, select(known, prefix));
+  private String settings() {
+    try {
+      var exported =
+          Files.exists(build.file()) ? Files.getLastModifiedTime(build.file()).toMillis() : 0;
+      return exported + "-" + build.libraryStamp();
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
     }
   }
 
-  /** The class path a set compiles against: the libraries and the module's class folders. */
-  private List<Path> classPath(boolean tests) {
-    var path = new ArrayList<>(build.libraries());
-    path.add(build.classes());
-    if (tests) {
-      path.add(build.testClasses());
+  /**
+   * The files in the module's class folders, by name, size and time: classes and the copied
+   * resources, so that one another build changed or deleted is noticed.
+   */
+  private String outputs() {
+    var crc = new CRC32C();
+    for (var folder : List.of(build.classes(), build.testClasses())) {
+      if (!Files.isDirectory(folder)) {
+        continue;
+      }
+      try (var walk = Files.walk(folder)) {
+        for (var file : walk.filter(Files::isRegularFile).sorted().toList()) {
+          var stamp = file + ":" + Files.size(file) + ":"
+              + Files.getLastModifiedTime(file).toMillis();
+          crc.update(stamp.getBytes(StandardCharsets.UTF_8));
+        }
+      } catch (IOException e) {
+        throw new UncheckedIOException(e);
+      }
     }
+    return Long.toHexString(crc.getValue());
+  }
+
+  /** The class path the tests compile against, in Maven's order: test classes first. */
+  private List<Path> testClassPath() {
+    var path = new ArrayList<>(List.of(build.testClasses(), build.classes()));
+    path.addAll(build.libraries());
     return path;
   }
 
   /**
    * @param compiled how many source files were compiled
    * @param apiChanged whether what other classes compile against may have changed
-   * @param all whether all sources of the set were compiled
    */
-  private record Change(int compiled, boolean apiChanged, boolean all) {}
+  private record Change(int compiled, boolean apiChanged) {}
 
   /** The sources of one class folder: the main ones or the tests. */
   private final class SourceSet {
@@ -136,35 +178,56 @@ final class Compilation {
     private final List<Path> roots;
     private final Path output;
     private final List<Path> classPath;
+    private final String release;
+    private final boolean parameters;
 
-    SourceSet(List<Path> roots, Path output, List<Path> classPath) {
+    SourceSet(
+        List<Path> roots, Path output, List<Path> classPath, String release, boolean parameters) {
       this.roots = roots;
       this.output = output;
       this.classPath = classPath;
+      this.release = release;
+      this.parameters = parameters;
     }
 
-    Change update(Map<String, String> sources, Map<String, String> before, List<Error> errors) {
+    /**
+     * @param known whether {@code before} holds what was compiled; if not, all is compiled
+     */
+    Change update(
+        Map<String, String> sources,
+        boolean known,
+        Map<String, String> before,
+        List<Error> errors) {
       var changed = sources.entrySet().stream()
           .filter(source -> !source.getValue().equals(before.get(source.getKey())))
           .map(source -> Path.of(source.getKey()))
           .toList();
       boolean deleted = before.keySet().stream().anyMatch(source -> !sources.containsKey(source));
-      if (before.isEmpty() || deleted) {
+      if (!known || deleted) {
         return all(sources, errors);
       }
       if (changed.isEmpty()) {
-        return new Change(0, false, false);
+        return new Change(0, false);
       }
       var old = api(changed);
+      // Deleted first, so that a class the source no longer declares does not seem unchanged.
+      try {
+        for (var file : old.keySet()) {
+          Files.delete(file);
+        }
+      } catch (IOException e) {
+        throw new UncheckedIOException(e);
+      }
       compile(changed, errors);
       if (!errors.isEmpty()) {
-        return new Change(changed.size(), false, false);
+        // javac may have checked the changed files against classes that are out of date; only
+        // compiling all of them tells whether the errors are real.
+        errors.clear();
+        return all(sources, errors);
       }
       var now = api(changed);
-      // A new class changes nothing others were compiled against; a changed or removed one may.
-      boolean same =
-          old.entrySet().stream().allMatch(type -> type.getValue().equals(now.get(type.getKey())));
-      return same ? new Change(changed.size(), false, false) : all(sources, errors);
+      // Also a new class: it can hide a class of the same name that another file imports.
+      return old.equals(now) ? new Change(changed.size(), false) : all(sources, errors);
     }
 
     private Change all(Map<String, String> sources, List<Error> errors) {
@@ -177,7 +240,7 @@ final class Compilation {
       }
       var everything = sources.keySet().stream().map(Path::of).toList();
       compile(everything, errors);
-      return new Change(everything.size(), true, true);
+      return new Change(everything.size(), true);
     }
 
     private void compile(List<Path> sources, List<Error> errors) {
@@ -201,8 +264,11 @@ final class Compilation {
           // not.
           "-encoding",
           "UTF-8"));
-      if (build.release() != null) {
-        options.addAll(List.of("--release", build.release()));
+      if (release != null) {
+        options.addAll(List.of("--release", release));
+      }
+      if (parameters) {
+        options.add("-parameters");
       }
       var diagnostics = new DiagnosticCollector<JavaFileObject>();
       var units = files.getJavaFileObjectsFromPaths(sources);
@@ -219,9 +285,12 @@ final class Compilation {
       }
     }
 
-    /** What other classes compile against, of every class the given source files compile to. */
-    private Map<String, String> api(List<Path> sources) {
-      var result = new HashMap<String, String>();
+    /**
+     * What other classes compile against, of every class the given source files compile to, by the
+     * class file.
+     */
+    private Map<Path, String> api(List<Path> sources) {
+      var result = new HashMap<Path, String>();
       for (var source : sources) {
         var folder = output.resolve(packageOf(source));
         if (!Files.isDirectory(folder)) {
@@ -238,7 +307,7 @@ final class Compilation {
                     .sourceFile()
                     .stringValue()
                     .equals(source.getFileName().toString())) {
-              result.put(model.thisClass().asInternalName(), signature(model));
+              result.put(file, signature(model));
             }
           }
         } catch (IOException e) {
@@ -273,6 +342,21 @@ final class Compilation {
         .ifPresent(permitted -> permitted
             .permittedSubclasses()
             .forEach(sub -> text.append(" permits ").append(sub.asInternalName())));
+    // An annotation's retention and targets decide how the classes that use it are compiled.
+    if ((type.flags().flagsMask() & ClassFile.ACC_ANNOTATION) != 0) {
+      type.findAttribute(Attributes.runtimeVisibleAnnotations())
+          .ifPresent(annotations -> annotations
+              .annotations()
+              .forEach(annotation -> text.append(" @").append(annotation)));
+    }
+    // The access of nested classes, which their own class files do not hold.
+    type.findAttribute(Attributes.innerClasses())
+        .ifPresent(inner -> inner
+            .classes()
+            .forEach(nested -> text.append(" nested ")
+                .append(nested.innerClass().asInternalName())
+                .append(' ')
+                .append(nested.flagsMask())));
     type.findAttribute(Attributes.record())
         .ifPresent(record -> record
             .components()
@@ -307,6 +391,10 @@ final class Compilation {
             .findAttribute(Attributes.signature())
             .ifPresent(signature ->
                 text.append(" <").append(signature.signature().stringValue()).append('>'));
+        // An annotation's defaults decide which of its uses compile.
+        method
+            .findAttribute(Attributes.annotationDefault())
+            .ifPresent(value -> text.append(" default ").append(value.defaultValue()));
         method
             .findAttribute(Attributes.exceptions())
             .ifPresent(exceptions -> exceptions
@@ -321,7 +409,7 @@ final class Compilation {
   private static Map<String, String> stamps(List<Path> roots, String suffix) {
     var stamps = new TreeMap<String, String>();
     for (var root : roots) {
-      if (!Files.isDirectory(root)) {
+      if (!Files.exists(root)) {
         continue;
       }
       try (var walk = Files.walk(root)) {

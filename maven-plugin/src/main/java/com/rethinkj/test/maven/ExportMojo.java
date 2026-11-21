@@ -44,11 +44,15 @@ import org.eclipse.aether.resolution.ArtifactResolutionException;
 @Mojo(name = "export", requiresDependencyResolution = ResolutionScope.TEST, threadSafe = true)
 public class ExportMojo extends AbstractMojo {
 
+  /** The version of the file's content; the runner exports anew when it reads another one. */
+  static final String FORMAT = "1";
+
   /** Where the file goes, relative to the module's build folder. */
   static final String FILE = "rethinkj-test/project.properties";
 
   private static final String SUREFIRE = "org.apache.maven.plugins:maven-surefire-plugin";
   private static final String COMPILER = "org.apache.maven.plugins:maven-compiler-plugin";
+  private static final String RESOURCES = "org.apache.maven.plugins:maven-resources-plugin";
 
   /** Surefire's late replacement, {@code @{name}}, by a property of the project. */
   private static final Pattern LATE = Pattern.compile("@\\{([^}]+)}");
@@ -71,8 +75,10 @@ public class ExportMojo extends AbstractMojo {
       return;
     }
     var values = new TreeMap<String, String>();
+    values.put("format", FORMAT);
     try {
       values.put("classpath", join(project.getTestClasspathElements()));
+      values.put("compileClasspath", join(project.getCompileClasspathElements()));
     } catch (DependencyResolutionRequiredException e) {
       throw new MojoExecutionException("Cannot resolve the test class path", e);
     }
@@ -88,14 +94,41 @@ public class ExportMojo extends AbstractMojo {
         join(project.getTestResources().stream().map(r -> r.getDirectory()).toList()));
     values.put("workdir", project.getBasedir().getPath());
     values.put("poms", join(poms()));
-    var release = value(configuration(COMPILER, "default-compile"), "release");
-    if (release == null) {
-      release = evaluate("${maven.compiler.release}");
+    var compiler = configuration(COMPILER, "default-compile");
+    var testCompiler = configuration(COMPILER, "default-testCompile");
+    put(values, "release", value(compiler, "release"), "${maven.compiler.release}");
+    put(values, "testRelease", value(testCompiler, "testRelease"), "${maven.compiler.testRelease}");
+    put(values, "parameters", value(compiler, "parameters"), "${maven.compiler.parameters}");
+    put(
+        values,
+        "testParameters",
+        value(testCompiler, "parameters"),
+        "${maven.compiler.parameters}");
+    if (processors(compiler) || processors(testCompiler)) {
+      values.put("processors", "true");
     }
-    if (release != null) {
-      values.put("release", release);
+    // Resources are filtered with these files; a change to one has to copy them again.
+    var filters = new ArrayList<>(project.getBuild().getFilters());
+    for (var execution : List.of("default-resources", "default-testResources")) {
+      var listed = list(configuration(RESOURCES, execution), "filters");
+      if (listed != null) {
+        filters.addAll(List.of(listed.strip().split("\\s*,\\s*")));
+      }
     }
+    values.put(
+        "filters",
+        join(filters.stream()
+            .map(filter -> new File(filter).isAbsolute()
+                ? filter
+                : new File(project.getBasedir(), filter).getPath())
+            .toList()));
     var surefire = configuration(SUREFIRE, "default-test");
+    // Surefire enables Java's assertions unless told not to.
+    var assertions = value(surefire, "enableAssertions");
+    if (assertions == null) {
+      assertions = evaluate("${enableAssertions}");
+    }
+    values.put("assertions", Boolean.toString(!"false".equals(assertions)));
     var argLine = value(surefire, "argLine");
     if (argLine == null) {
       argLine = evaluate("${argLine}");
@@ -103,6 +136,11 @@ public class ExportMojo extends AbstractMojo {
     if (argLine != null) {
       values.put("jvm.args", late(argLine));
     }
+    // Which tests a run without -Dtest selects; unset, the runner uses Surefire's defaults.
+    put(values, "test.includes", list(surefire, "includes"), null);
+    put(values, "test.excludes", list(surefire, "excludes"), null);
+    put(values, "test.groups", value(surefire, "groups"), "${groups}");
+    put(values, "test.excludedGroups", value(surefire, "excludedGroups"), "${excludedGroups}");
     var properties = surefire == null ? null : surefire.getChild("systemPropertyVariables");
     if (properties != null) {
       for (var property : properties.getChildren()) {
@@ -120,6 +158,66 @@ public class ExportMojo extends AbstractMojo {
     }
     values.put("launcher", launcher());
     write(values);
+  }
+
+  /**
+   * Whether javac may run annotation processors in a compiler execution. When unsure it says yes,
+   * so that the runner refuses the module rather than compile it differently.
+   */
+  private boolean processors(Xpp3Dom compiler) throws MojoExecutionException {
+    var proc = value(compiler, "proc");
+    if ("none".equals(proc)) {
+      return false;
+    }
+    // Older compiler plugins ignore the property, so it only ever counts towards processors.
+    var property = evaluate("${maven.compiler.proc}");
+    if (processing(proc) || processing(property)) {
+      return true;
+    }
+    return compiler != null
+        && (entries(compiler, "annotationProcessorPaths")
+            || entries(compiler, "annotationProcessors"));
+  }
+
+  private static boolean processing(String proc) {
+    return "full".equals(proc) || "only".equals(proc);
+  }
+
+  private static boolean entries(Xpp3Dom configuration, String name) {
+    var child = configuration.getChild(name);
+    return child != null && child.getChildCount() > 0;
+  }
+
+  /** Puts a configured value, or else the value of a property, if there is one. */
+  private void put(Map<String, String> values, String key, String configured, String property)
+      throws MojoExecutionException {
+    var value = configured != null || property == null ? configured : evaluate(property);
+    if (value != null && !value.isBlank()) {
+      values.put(key, value);
+    }
+  }
+
+  /**
+   * The values of a list parameter such as {@code <includes>}, separated by commas: its children,
+   * or the value Maven splits at commas when it has none.
+   */
+  private String list(Xpp3Dom configuration, String name) throws MojoExecutionException {
+    var child = configuration == null ? null : configuration.getChild(name);
+    if (child == null) {
+      return null;
+    }
+    if (child.getChildCount() == 0) {
+      var text = evaluate(child.getValue());
+      return text == null || text.isBlank() ? null : text;
+    }
+    var items = new ArrayList<String>();
+    for (var item : child.getChildren()) {
+      var text = evaluate(item.getValue());
+      if (text != null && !text.isBlank()) {
+        items.add(text);
+      }
+    }
+    return String.join(",", items);
   }
 
   /** The POM of the module and those of its parents, whose changes call for a new export. */

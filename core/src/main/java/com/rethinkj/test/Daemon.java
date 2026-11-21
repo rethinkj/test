@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -35,8 +36,8 @@ public final class Daemon {
   private Daemon() {}
 
   /**
-   * @param args the export file and the socket, or the export file, {@code --once} and the
-   *     selectors for a single run in this JVM
+   * @param args the export file, the socket and the stamp of the export the client read, or the
+   *     export file, {@code --once} and the selectors for a single run in this JVM
    */
   public static void main(String[] args) throws IOException {
     var build = Build.read(Path.of(args[0]));
@@ -44,15 +45,23 @@ public final class Daemon {
     if (args[1].equals("--once")) {
       var out = new OutputStreamWriter(System.out, StandardCharsets.UTF_8);
       int code = run(runner, Arrays.asList(args).subList(2, args.length), out);
+      out.write("exit " + code + "\n");
       out.flush();
       System.exit(code);
     }
-    serve(build, runner, Path.of(args[1]));
+    var stamp = build.stamp();
+    if (!stamp.equals(args[2])) {
+      System.out.println("The export changed while the daemon started; the client starts another");
+      System.exit(3);
+    }
+    serve(runner, Path.of(args[1]), stamp);
+    // Also when a test left a thread running that would keep the JVM alive.
+    System.exit(0);
   }
 
-  private static void serve(Build build, WarmRunner runner, Path socket) throws IOException {
-    var stamp = Build.stamp(build.file());
+  private static void serve(WarmRunner runner, Path socket, String stamp) throws IOException {
     var lastUsed = new AtomicLong(System.nanoTime());
+    var running = new AtomicBoolean();
     Thread.ofVirtual().name("rethinkj-test idle").start(() -> {
       while (true) {
         try {
@@ -61,7 +70,8 @@ public final class Daemon {
           Thread.currentThread().interrupt();
           return;
         }
-        if (System.nanoTime() - lastUsed.get() > TimeUnit.MINUTES.toNanos(IDLE_MINUTES)) {
+        if (!running.get()
+            && System.nanoTime() - lastUsed.get() > TimeUnit.MINUTES.toNanos(IDLE_MINUTES)) {
           System.exit(0);
         }
       }
@@ -83,10 +93,14 @@ public final class Daemon {
             continue;
           }
           if (!words.get(1).equals(stamp)) {
+            // Stop listening first, so that the client's next attempt cannot reach this daemon.
+            server.close();
+            Files.deleteIfExists(socket);
             out.write("restart\n");
             out.flush();
             return;
           }
+          running.set(true);
           int code = run(
               runner,
               words.subList(2, words.size()).stream()
@@ -97,8 +111,10 @@ public final class Daemon {
           out.flush();
         } catch (IOException e) {
           // The client went away during the run; the next one connects anew.
+        } finally {
+          running.set(false);
+          lastUsed.set(System.nanoTime());
         }
-        lastUsed.set(System.nanoTime());
         if (runner.worn()) {
           System.out.println("Replaced after " + runner.leaked() + " leaked class loaders");
           return;

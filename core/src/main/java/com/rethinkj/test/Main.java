@@ -3,13 +3,20 @@ package com.rethinkj.test;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.URISyntaxException;
 import java.net.UnixDomainSocketAddress;
 import java.nio.channels.Channels;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.PosixFileAttributes;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -29,8 +36,16 @@ public final class Main {
 
   private Main() {}
 
-  public static void main(String[] args) throws Exception {
-    System.exit(run(List.of(args)));
+  public static void main(String[] args) {
+    try {
+      System.exit(run(List.of(args)));
+    } catch (Exception e) {
+      System.out.println(new Json()
+          .field("v", AgentReport.VERSION)
+          .field("event", "error")
+          .field("message", String.valueOf(e.getMessage())));
+      System.exit(2);
+    }
   }
 
   static int run(List<String> args) throws Exception {
@@ -41,43 +56,83 @@ public final class Main {
     if (!Files.exists(export) || Build.read(export).stale()) {
       Maven.export(workdir, version());
     }
-    var build = Build.read(export);
+    // Read again when an export ran meanwhile, so that the stamp names the build that was read.
+    Build build;
+    FileTime written;
+    do {
+      written = Files.getLastModifiedTime(export);
+      build = Build.read(export);
+    } while (!written.equals(Files.getLastModifiedTime(export)));
+    var stamp = build.stamp();
     if (fresh) {
       var once = new ArrayList<>(List.of("--once"));
       once.addAll(selectors);
-      return jvm(build, once).inheritIO().start().waitFor();
+      var process =
+          jvm(build, once).redirectError(ProcessBuilder.Redirect.INHERIT).start();
+      var in = new BufferedReader(
+          new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+      // Read to the end, so that output after the result cannot block the JVM as it ends.
+      Integer code = null;
+      for (var line = in.readLine(); line != null; line = in.readLine()) {
+        if (code == null && line.startsWith("exit ")) {
+          code = Integer.parseInt(line.substring("exit ".length()));
+        } else {
+          System.out.println(line);
+        }
+      }
+      int ended = process.waitFor();
+      if (code == null) {
+        // A test ended the JVM, which Surefire counts as a failure too.
+        throw new IllegalStateException(
+            "The test JVM ended with " + ended + " before the run was complete");
+      }
+      return code;
     }
     var socket = socket(workdir);
-    var request = "run\t" + Build.stamp(export) + "\t" + String.join("\t", selectors) + "\n";
+    var request = "run\t" + stamp + "\t" + String.join("\t", selectors) + "\n";
     for (int attempt = 0; attempt < 2; attempt++) {
       var running = connect(socket);
-      if (running == null) {
-        start(build, socket);
-      }
-      try (var channel = running != null ? running : await(socket)) {
+      var started = running == null ? start(build, socket, stamp) : null;
+      try (var channel = running != null ? running : await(socket, started)) {
         var code = talk(channel, request);
         if (code >= 0) {
           return code;
         }
       }
     }
-    throw new IllegalStateException("The daemon of " + workdir + " keeps asking for a restart");
+    throw new IllegalStateException(
+        "Cannot reach the daemon of " + workdir + "; its log is target/rethinkj-test/daemon.log");
   }
 
-  /** Sends the request and prints the answer; the exit code, or -1 when it asks for a restart. */
+  /**
+   * Sends the request and prints the answer; the exit code, or -1 when it asks for a restart or
+   * goes away before it answers, as a daemon that is being replaced does.
+   */
   private static int talk(SocketChannel channel, String request) throws IOException {
-    var out = Channels.newWriter(channel, StandardCharsets.UTF_8);
-    out.write(request);
-    out.flush();
-    var in = new BufferedReader(Channels.newReader(channel, StandardCharsets.UTF_8));
-    for (var line = in.readLine(); line != null; line = in.readLine()) {
-      if (line.equals("restart")) {
-        return -1;
+    boolean answered = false;
+    try {
+      var out = Channels.newWriter(channel, StandardCharsets.UTF_8);
+      out.write(request);
+      out.flush();
+      var in = new BufferedReader(Channels.newReader(channel, StandardCharsets.UTF_8));
+      for (var line = in.readLine(); line != null; line = in.readLine()) {
+        if (line.equals("restart")) {
+          return -1;
+        }
+        if (line.startsWith("exit ")) {
+          return Integer.parseInt(line.substring("exit ".length()));
+        }
+        answered = true;
+        System.out.println(line);
       }
-      if (line.startsWith("exit ")) {
-        return Integer.parseInt(line.substring("exit ".length()));
+    } catch (IOException e) {
+      if (answered) {
+        throw e;
       }
-      System.out.println(line);
+      return -1;
+    }
+    if (!answered) {
+      return -1;
     }
     throw new IOException(
         "The daemon ended during the run; its log is target/rethinkj-test/daemon.log");
@@ -85,10 +140,10 @@ public final class Main {
 
   // shortcut: two clients that start a daemon at once start two; the second's socket wins and the
   // first idles out. Add a lock file when that bites.
-  private static void start(Build build, Path socket) throws IOException {
+  private static Process start(Build build, Path socket, String stamp) throws IOException {
     var log = build.workdir().resolve("target/rethinkj-test/daemon.log");
     Files.createDirectories(log.getParent());
-    jvm(build, List.of(socket.toString()))
+    return jvm(build, List.of(socket.toString(), stamp))
         .redirectErrorStream(true)
         .redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile()))
         .start();
@@ -101,6 +156,9 @@ public final class Main {
         .command()
         .orElse(Path.of(System.getProperty("java.home"), "bin", "java").toString());
     var command = new ArrayList<>(List.of(java));
+    if (build.assertions()) {
+      command.add("-ea");
+    }
     command.addAll(build.jvmArgs());
     build.systemProperties().forEach((name, value) -> command.add("-D" + name + "=" + value));
     var classPath = new ArrayList<String>();
@@ -115,10 +173,40 @@ public final class Main {
     return new ProcessBuilder(command).directory(build.workdir().toFile());
   }
 
-  /** The socket of a module's daemon, in the temporary folder: socket paths are short. */
-  static Path socket(Path workdir) {
-    var name = "rethinkj-test-" + Integer.toHexString(workdir.toString().hashCode()) + ".sock";
-    return Path.of(System.getProperty("java.io.tmpdir"), name);
+  /** The socket of a module's daemon, in a folder of the user's own. */
+  static Path socket(Path workdir) throws IOException {
+    return folder().resolve(Integer.toHexString(workdir.toString().hashCode()) + ".sock");
+  }
+
+  /**
+   * A folder that only this user can access, with a short path, as sockets need: in the user's
+   * runtime folder, or else in the temporary folder. Anyone who could create a socket there could
+   * answer in the daemon's place.
+   */
+  static Path folder() throws IOException {
+    var user = System.getProperty("user.name");
+    var runtime = System.getenv("XDG_RUNTIME_DIR");
+    var folder = runtime != null && !runtime.isBlank()
+        ? Path.of(runtime, "rethinkj-test")
+        : Path.of(System.getProperty("java.io.tmpdir"), "rethinkj-test-" + user);
+    if (!FileSystems.getDefault().supportedFileAttributeViews().contains("posix")) {
+      // Windows: the temporary folder is in the user's profile, which only they can access.
+      return Files.createDirectories(folder);
+    }
+    var ownerOnly = PosixFilePermissions.fromString("rwx------");
+    try {
+      Files.createDirectory(folder, PosixFilePermissions.asFileAttribute(ownerOnly));
+    } catch (FileAlreadyExistsException e) {
+      // Checked below, like a folder created now.
+    }
+    var attributes =
+        Files.readAttributes(folder, PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+    if (!attributes.isDirectory()
+        || !attributes.owner().getName().equals(user)
+        || !attributes.permissions().equals(ownerOnly)) {
+      throw new IOException(folder + " has to be a folder that only " + user + " can access");
+    }
+    return folder;
   }
 
   private static SocketChannel connect(Path socket) {
@@ -132,12 +220,16 @@ public final class Main {
     }
   }
 
-  private static SocketChannel await(Path socket) throws InterruptedException {
+  private static SocketChannel await(Path socket, Process daemon) throws InterruptedException {
     var deadline = System.currentTimeMillis() + START_MILLIS;
     while (System.currentTimeMillis() < deadline) {
       var channel = connect(socket);
       if (channel != null) {
         return channel;
+      }
+      if (daemon != null && !daemon.isAlive()) {
+        throw new IllegalStateException("The daemon ended with " + daemon.exitValue()
+            + " as it started; its log is target/rethinkj-test/daemon.log");
       }
       Thread.sleep(20);
     }

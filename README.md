@@ -15,9 +15,10 @@ The report for agents works, with `mvn test` and with the warm runner, which kee
 Install it with `mvn install` in this repository, then run it in the folder of a Maven module:
 
 ```sh
-java -jar rethinkj-test-core-0.1.0-SNAPSHOT.jar                        # all tests of the module
-java -jar rethinkj-test-core-0.1.0-SNAPSHOT.jar com.example.CartTest   # a class, a.BTest#method or a package
-java -jar rethinkj-test-core-0.1.0-SNAPSHOT.jar --fresh                # once, in a new JVM
+runner=~/.m2/repository/com/rethinkj/test/rethinkj-test-core/0.1.0-SNAPSHOT/rethinkj-test-core-0.1.0-SNAPSHOT.jar
+java -jar $runner                        # all tests of the module
+java -jar $runner com.example.CartTest   # a class, a.BTest#method or a package
+java -jar $runner --fresh                # once, in a new JVM
 ```
 
 The first run asks Maven for the module's class path and test JVM options, compiles the module, and starts a JVM that stays running. After that, a run compiles only the files that changed and runs the tests in that JVM. A change that other classes compile against, such as a signature or a constant, compiles the module again. Changed resources are copied with Maven's `resources` goals. A change to a POM starts a new JVM.
@@ -28,7 +29,7 @@ It prints the report below. Two more kinds of lines can appear: `{"v":1,"event":
 
 The JVM ends after 30 minutes without a run, and it is replaced when the classes of earlier runs do not leave memory. Its output goes to `target/rethinkj-test/daemon.log`.
 
-Limits for now: tests run on the class path, also in a module with a `module-info.java`, sources are read as UTF-8, and other modules of a multi-module build come from their JARs, as with `mvn -pl`.
+Limits for now: tests run on the class path, also in a module with a `module-info.java`; sources are read as UTF-8; other modules of a multi-module build come from their JARs, as with `mvn -pl`; a module with annotation processors is refused; and a library that reads a resource through its own class finds its own copy before one of the module's tests.
 
 ## Report for agents
 

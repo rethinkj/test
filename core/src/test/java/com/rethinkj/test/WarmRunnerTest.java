@@ -1,6 +1,7 @@
 package com.rethinkj.test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -46,6 +47,24 @@ class WarmRunnerTest {
     // The file that did not compile is compiled again, with both mistakes fixed.
     edit(project, greeter, "GREETING + + \" \" + name", "GREETING + \", \" + name");
     assertEquals(0, runner.run(List.of(), new StringWriter()));
+
+    // The class file of a class the source no longer declares must not keep the test compiling.
+    edit(project, greeter, "public static class Shout {}", "");
+    report = new StringWriter();
+    assertEquals(2, runner.run(List.of(), report));
+    assertTrue(
+        report.toString().contains("\"at\":\"src/test/java/greet/GreeterTest.java:"),
+        report.toString());
+  }
+
+  @Test
+  void selectsTheClassesSurefireSelects() {
+    assertTrue("com.example.CartTest".matches(WarmRunner.regex("**/*Test.*")));
+    assertTrue("com.example.CartTest".matches(WarmRunner.regex("*Test.java")));
+    assertTrue("com.example.Cart$Item".matches(WarmRunner.regex("**/*$*")));
+    assertFalse("com.example.CartTests".matches(WarmRunner.regex("**/*Test.java")));
+    assertTrue("com.example.unit.CartTest".matches(WarmRunner.regex("unit/*Test.*")));
+    assertFalse("com.other.CartIT".matches(WarmRunner.regex("com/example/**/*IT.java")));
   }
 
   private static Build build(Path project) {
@@ -57,16 +76,24 @@ class WarmRunnerTest {
         project.resolve(Build.EXPORT),
         project,
         classPath,
+        List.of(classes),
         classes,
         testClasses,
         List.of(project.resolve("src/main/java")),
         List.of(project.resolve("src/test/java")),
         List.of(),
         "25",
+        "25",
+        false,
+        false,
+        false,
+        true,
         List.of(),
         Map.of(),
         Project.junit().getFirst(),
-        List.of());
+        List.of(),
+        Build.Selection.DEFAULT,
+        Build.FORMAT);
   }
 
   private static void edit(Path project, String file, String from, String to) throws IOException {

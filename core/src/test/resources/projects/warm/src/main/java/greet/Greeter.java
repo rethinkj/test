@@ -7,4 +7,6 @@ public class Greeter {
   public String greet(String name) {
     return GREETING + ", " + name;
   }
+
+  public static class Shout {}
 }

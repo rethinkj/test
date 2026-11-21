@@ -40,7 +40,11 @@ final class Maven {
 
   /** Copies the module's main and test resources into its class folders, filtered as Maven does. */
   static void copyResources(Path workdir) {
-    run(workdir, "-o", "resources:resources", "resources:testResources");
+    // The executions of the lifecycle, so that their configuration applies.
+    run(
+        workdir,
+        "resources:resources@default-resources",
+        "resources:testResources@default-testResources");
   }
 
   /** Writes {@link Build#EXPORT} with this version of the Maven plugin. */
