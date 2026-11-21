@@ -25,9 +25,10 @@ import java.util.List;
  * runs: {@code java -jar rethinkj-test-core.jar [--fresh] [selectors]}.
  *
  * <p>Selectors are classes ({@code a.BTest}), methods ({@code a.BTest#c}) or packages ({@code
- * a}); without one, all tests run. It prints the report's lines and exits with 0 when every test
- * passed, 1 when one failed and 2 when the code did not compile or the run could not start. With
- * {@code --fresh} it runs once in a new JVM.
+ * a}); without one, the test classes a change can affect run, and with {@code --all} all of them.
+ * It prints the report's lines and exits with 0 when every test passed, 1 when one failed and 2
+ * when the code did not compile or the run could not start. With {@code --fresh} it runs once in a
+ * new JVM. With {@code --hook} it answers a hook of Claude Code, as {@link Hook} describes.
  */
 public final class Main {
 
@@ -36,9 +37,21 @@ public final class Main {
 
   private Main() {}
 
-  public static void main(String[] args) {
+  public static void main(String[] args) throws IOException {
+    if (List.of(args).contains("--hook")) {
+      // A hook answers on its own terms and never fails the edit it runs after.
+      try {
+        var answer = Hook.answer(new String(System.in.readAllBytes(), StandardCharsets.UTF_8));
+        // UTF-8, as JSON is, whatever the console's encoding.
+        System.out.write(answer.getBytes(StandardCharsets.UTF_8));
+        System.out.flush();
+      } catch (Exception e) {
+        System.err.println("rethinkj-test: " + e);
+      }
+      System.exit(0);
+    }
     try {
-      System.exit(run(List.of(args)));
+      System.exit(run(Path.of("").toAbsolutePath(), List.of(args)));
     } catch (Exception e) {
       System.out.println(new Json()
           .field("v", AgentReport.VERSION)
@@ -48,10 +61,10 @@ public final class Main {
     }
   }
 
-  static int run(List<String> args) throws Exception {
+  /** Runs the tests of the module in the folder given, as {@link #main} describes. */
+  static int run(Path workdir, List<String> args) throws Exception {
     var fresh = args.contains("--fresh");
     var selectors = args.stream().filter(arg -> !arg.equals("--fresh")).toList();
-    var workdir = Path.of("").toAbsolutePath();
     var export = workdir.resolve(Build.EXPORT);
     if (!Files.exists(export) || Build.read(export).stale()) {
       Maven.export(workdir, version());
