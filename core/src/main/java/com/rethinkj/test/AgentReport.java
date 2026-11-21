@@ -53,6 +53,9 @@ public final class AgentReport implements TestExecutionListener {
   /** The files written in this JVM: a second run into the same file appends to it. */
   private static final Set<Path> STARTED = new HashSet<>();
 
+  /** Where a report written to a given writer goes, or null when the file is configured. */
+  private final Writer given;
+
   private Writer out;
   private TestPlan plan;
   private long startedAt;
@@ -63,10 +66,20 @@ public final class AgentReport implements TestExecutionListener {
   private final Map<String, StringBuilder> output = new HashMap<>();
   private final Set<String> counted = new HashSet<>();
 
+  /** The report the JUnit Platform registers: written to the file configured, if one is. */
+  public AgentReport() {
+    this(null);
+  }
+
+  /** A report written to the writer given, which it flushes and leaves open. */
+  AgentReport(Writer out) {
+    this.given = out;
+  }
+
   @Override
   public synchronized void testPlanExecutionStarted(TestPlan testPlan) {
     var file = testPlan.getConfigurationParameters().get(FILE);
-    if (file.isEmpty() || file.get().isBlank()) {
+    if (given == null && (file.isEmpty() || file.get().isBlank())) {
       return;
     }
     plan = testPlan;
@@ -74,6 +87,10 @@ public final class AgentReport implements TestExecutionListener {
     passed = failed = aborted = skipped = 0;
     output.clear();
     counted.clear();
+    if (given != null) {
+      out = given;
+      return;
+    }
     var path = Path.of(file.get()).toAbsolutePath().normalize();
     try {
       Files.createDirectories(path.getParent());
@@ -151,7 +168,9 @@ public final class AgentReport implements TestExecutionListener {
         .field("ms", (System.nanoTime() - startedAt) / 1_000_000);
     write(line);
     try {
-      out.close();
+      if (given == null) {
+        out.close();
+      }
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     } finally {
@@ -169,6 +188,11 @@ public final class AgentReport implements TestExecutionListener {
         .filter(TestIdentifier::isTest)
         .filter(descendant -> counted.add(descendant.getUniqueId()))
         .count();
+  }
+
+  /** How many tests and classes failed in the last run. */
+  synchronized int failed() {
+    return failed;
   }
 
   private Json failure(TestIdentifier test, Throwable error) {

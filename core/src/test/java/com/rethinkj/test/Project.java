@@ -22,13 +22,7 @@ record Project(Path source, Path classes) {
   /** Compiles the main and test code of the project named, against JUnit Jupiter. */
   static Project compile(String name, Path into) {
     var source = Path.of("src/test/resources/projects", name);
-    var classPath = Stream.of(
-            org.junit.jupiter.api.Test.class,
-            org.opentest4j.AssertionFailedError.class,
-            org.apiguardian.api.API.class)
-        .map(Project::jar)
-        .map(Path::toString)
-        .toList();
+    var classPath = junit().stream().map(Path::toString).toList();
     var options = new ArrayList<>(List.of(
         "-proc:none",
         "--release",
@@ -70,6 +64,16 @@ record Project(Path source, Path classes) {
       }
     }
     throw new AssertionError(text + " is not in " + file);
+  }
+
+  /** The JARs a project's tests compile against: JUnit Jupiter's API and what it needs. */
+  static List<Path> junit() {
+    return Stream.of(
+            org.junit.jupiter.api.Test.class,
+            org.opentest4j.AssertionFailedError.class,
+            org.apiguardian.api.API.class)
+        .map(Project::jar)
+        .toList();
   }
 
   private static Path jar(Class<?> type) {

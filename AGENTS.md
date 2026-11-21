@@ -12,7 +12,7 @@ This file holds the rules for working on the repository, and nothing else. What 
 - Windows 11 or later and Linux, on x64, with JDK 25.
 - Tests are JUnit Jupiter tests, run by the stock Jupiter engine through the JUnit Platform Launcher. No test API, annotations or assertions of our own: what the runner adds comes as a Platform listener or a Jupiter extension, so a test runs the same with `mvn test`, in an IDE and here.
 - Maven projects without Spring first. Gradle and Spring are later targets; nothing may rule them out. What the runner needs from a build (class path, test class folders, JVM options) comes from one adapter per build tool, never from Maven's folder layout read in the runner itself.
-- `core` depends on `java.base` and the JUnit Platform Launcher only, at run time. Another library is added only with a reason in its pull request. An adapter depends on its build tool's API, which the build tool provides at run time, and on nothing else.
+- `core` depends on `java.base`, `java.compiler` and the JUnit Platform Launcher only, at run time. Another library is added only with a reason in its pull request. An adapter depends on its build tool's API, which the build tool provides at run time, and on nothing else.
 
 ## Modules
 
