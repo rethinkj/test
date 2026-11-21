@@ -45,7 +45,7 @@ With a hook, Claude Code gets the result of the affected tests after each edit, 
       {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
-          {"type": "command", "command": "java -jar <path to rethinkj-test-core.jar> --hook", "timeout": 120}
+          {"type": "command", "command": "java -jar \"<path to rethinkj-test-core.jar>\" --hook", "timeout": 120}
         ]
       }
     ]
