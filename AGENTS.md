@@ -19,7 +19,6 @@ This file holds the rules for working on the repository, and nothing else. What 
 | Directory | Artifact | Purpose |
 | --- | --- | --- |
 | `core/` | `rethinkj-test-core` | The runner: the warm JVM, the selection of tests and the report, package `com.rethinkj.test` |
-| `bench/` | not published | Replays edits on real projects and measures the runner against `mvn test` |
 
 A module is added to this table in the pull request that adds it.
 
@@ -37,7 +36,7 @@ mvn spotless:apply                # format; mvn verify fails on a file that is n
 
 - Keep tests few and fast. A test earns its place by failing when behavior a user can notice breaks. No benchmarks and no timing printouts in the test suite, no tests of tests, and no second test for what another already covers.
 - The runner is tested on small projects under `core/src/test/resources/projects`, each a folder a user could build with `mvn test`. A test compares the runner's verdict with what Maven reports for the same project.
-- `bench` is not part of `mvn verify`. Its numbers go into the issue it was run for, never into the repository.
+- Benchmarks are not part of `mvn verify`. Their numbers go into the issue they were run for, never into the repository.
 
 ## Rules the code does not show
 
