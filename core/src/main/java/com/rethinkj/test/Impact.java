@@ -21,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -52,6 +53,7 @@ final class Impact {
 
   private final Build build;
   private final Map<String, Set<String>> references = new HashMap<>();
+  private final Map<String, List<String>> supertypes = new HashMap<>();
   private final Map<Path, String[]> hashes = new HashMap<>();
 
   /** For each test class, the classes it used and their hashes then. */
@@ -83,8 +85,12 @@ final class Impact {
         named.add(internal.replace('/', '.'));
       }
     }
+    var parents = new ArrayList<String>();
+    model.superclass().ifPresent(parent -> parents.add(parent.asInternalName().replace('/', '.')));
+    model.interfaces().forEach(parent -> parents.add(parent.asInternalName().replace('/', '.')));
     synchronized (this) {
       references.put(name, named);
+      supertypes.put(name, parents);
     }
     var self = model.thisClass().asSymbol();
     boolean flag = (model.flags().flagsMask() & ClassFile.ACC_INTERFACE) == 0;
@@ -99,6 +105,12 @@ final class Impact {
       public void accept(CodeBuilder code, CodeElement element) {
         if (element instanceof ReturnInstruction) {
           code.ldc(self).invokestatic(PROBE, "exit", HIT);
+        }
+        // A static field of another class, which a later test class can read.
+        if (element instanceof FieldInstruction field
+            && field.opcode() == Opcode.PUTSTATIC
+            && !field.owner().asSymbol().equals(self)) {
+          code.ldc(field.owner().asSymbol()).invokestatic(PROBE, "wrote", HIT);
         }
         code.with(element);
       }
@@ -226,9 +238,16 @@ final class Impact {
       classes.add(name);
       pending.addAll(initialized.getOrDefault(name, Set.of()));
       for (var named : references.getOrDefault(name, Set.of())) {
-        classes.add(named);
-        // A class it names was maybe initialized by another test class, running other classes.
-        pending.addAll(initialized.getOrDefault(named, Set.of()));
+        // With its supertypes: a static field named through a class can be declared in one.
+        for (var type = named; type != null; type = superclass(type)) {
+          classes.add(type);
+          // A class it names was maybe initialized by another test class, running other classes.
+          pending.addAll(initialized.getOrDefault(type, Set.of()));
+          for (var parent : supertypes.getOrDefault(type, List.of())) {
+            classes.add(parent);
+            pending.addAll(initialized.getOrDefault(parent, Set.of()));
+          }
+        }
       }
     }
     var record = new TreeMap<String, String>();
@@ -247,6 +266,11 @@ final class Impact {
     }
   }
 
+  private String superclass(String name) {
+    var parents = supertypes.getOrDefault(name, List.of());
+    return parents.isEmpty() ? null : parents.getFirst();
+  }
+
   /** The hash of a class of the module now, without debug information, or {@code gone}. */
   String hash(String name) {
     var relative = name.replace('.', '/') + ".class";
@@ -261,7 +285,11 @@ final class Impact {
 
   private String hash(Path file) {
     try {
-      var stamp = Files.getLastModifiedTime(file).toMillis() + ":" + Files.size(file);
+      // Keyed by the bytes: a class compiled anew can keep its size and time.
+      var bytes = Files.readAllBytes(file);
+      var raw = new CRC32C();
+      raw.update(bytes);
+      var stamp = Long.toHexString(raw.getValue());
       var known = hashes.get(file);
       if (known != null && known[0].equals(stamp)) {
         return known[1];
@@ -273,7 +301,7 @@ final class Impact {
           ClassFile.ConstantPoolSharingOption.NEW_POOL,
           // Stack maps follow from the code; making them anew would need the class hierarchy.
           ClassFile.StackMapsOption.DROP_STACK_MAPS);
-      var model = files.parse(Files.readAllBytes(file));
+      var model = files.parse(bytes);
       var stripped = files.transformClass(
           model,
           ClassTransform.dropping(

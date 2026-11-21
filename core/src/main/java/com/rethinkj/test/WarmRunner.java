@@ -30,7 +30,6 @@ import org.junit.platform.engine.DiscoverySelector;
 import org.junit.platform.engine.TestExecutionResult;
 import org.junit.platform.engine.discovery.ClassNameFilter;
 import org.junit.platform.engine.support.descriptor.ClassSource;
-import org.junit.platform.engine.support.descriptor.MethodSource;
 import org.junit.platform.launcher.TagFilter;
 import org.junit.platform.launcher.TestExecutionListener;
 import org.junit.platform.launcher.TestIdentifier;
@@ -250,6 +249,12 @@ final class WarmRunner {
   private final class Recorder implements TestExecutionListener {
 
     private final Set<String> failed = new HashSet<>();
+    private TestPlan plan;
+
+    @Override
+    public void testPlanExecutionStarted(TestPlan testPlan) {
+      plan = testPlan;
+    }
 
     @Override
     public void executionStarted(TestIdentifier test) {
@@ -283,12 +288,15 @@ final class WarmRunner {
           : null;
     }
 
+    /** The test class a test or class belongs to, through its parents in the plan. */
     private String outer(TestIdentifier test) {
-      var source = test.getSource().orElse(null);
-      var name = source instanceof MethodSource method
-          ? method.getClassName()
-          : source instanceof ClassSource type ? type.getClassName() : "";
-      return name.contains("$") ? name.substring(0, name.indexOf('$')) : name;
+      for (var id = test; id != null; id = plan.getParent(id).orElse(null)) {
+        var name = testClass(id);
+        if (name != null) {
+          return name;
+        }
+      }
+      return "";
     }
   }
 

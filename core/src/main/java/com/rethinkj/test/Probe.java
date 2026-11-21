@@ -81,20 +81,16 @@ public final class Probe {
   /** Starts a new record, and returns the names of the classes of the one before. */
   static synchronized List<String> restart() {
     var names = new ArrayList<String>(HITS.size());
-    for (var type : HITS) {
-      names.add(type.getName());
-      if (!type.isInterface()) {
-        try {
-          Field field = type.getDeclaredField(FIELD);
-          field.setAccessible(true);
-          // The class ran a method, so it is initialized: setting the field runs nothing.
-          field.setBoolean(null, false);
-        } catch (ReflectiveOperationException e) {
-          throw new IllegalStateException("No probe in " + type, e);
+    try {
+      for (var type : HITS) {
+        names.add(type.getName());
+        if (!type.isInterface()) {
+          reset(type);
         }
       }
+    } finally {
+      HITS.clear();
     }
-    HITS.clear();
     for (var owner : WRITTEN) {
       WRITERS.computeIfAbsent(owner, name -> new LinkedHashSet<>()).addAll(names);
     }
@@ -102,8 +98,21 @@ public final class Probe {
     return names;
   }
 
-  /**
-   * What ran for each class of this run before a test class could use it: in its static
+  private static void reset(Class<?> type) {
+    try {
+      Field field = type.getDeclaredField(FIELD);
+      field.setAccessible(true);
+      // The class ran a method, so it is initialized: setting the field runs nothing.
+      field.setBoolean(null, false);
+    } catch (LinkageError e) {
+      // Its static initializer failed: the class cannot run again in this run, so its field does
+      // not matter.
+    } catch (ReflectiveOperationException e) {
+      throw new IllegalStateException("No probe in " + type, e);
+    }
+  }
+
+  /** What ran for each class of this run before a test class could use it: in its static
    * initializer, and in the records that wrote its static fields.
    */
   static synchronized Map<String, Set<String>> initialized() {

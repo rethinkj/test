@@ -80,6 +80,11 @@ class WarmRunnerTest {
         1,
         "\"classes\":1,\"leftOut\":5,\"leftOutTests\":7,\"why\":[\"changed greet.Counter\"]");
     assertTrue(report.contains("\"test\":\"greet.CounterTest#countsFromOne\""), report);
+    assertSelection(
+        runner,
+        List.of(),
+        1,
+        "\"classes\":1,\"leftOut\":5,\"leftOutTests\":7,\"why\":[\"failed greet.CounterTest\"]");
 
     // The class that failed runs again; a comment changes no bytecode but the lines, which the
     // hashes leave out.
