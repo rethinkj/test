@@ -1,0 +1,1 @@
+- Added the report for agents: with `-Drethinkj.test.report=<file>`, a test run writes one JSON line per failure, with the file and line, expected and actual and the project's own stack frames, and a line with the counts.
