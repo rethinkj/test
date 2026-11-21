@@ -1,0 +1,1 @@
+- Fixed the counts of the agent report: a test class aborted in `@AfterAll` no longer counts its tests again as aborted.
