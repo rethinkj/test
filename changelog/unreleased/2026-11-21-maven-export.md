@@ -1,0 +1,1 @@
+- Added the Maven plugin `rethinkj-test-maven-plugin` with the goal `export`, which writes a module's test class path, folders, Java release, Surefire's `argLine` and system properties, and the matching JUnit Platform Launcher to `target/rethinkj-test/project.properties`.
