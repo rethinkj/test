@@ -37,7 +37,7 @@ public final class Main {
     var fresh = args.contains("--fresh");
     var selectors = args.stream().filter(arg -> !arg.startsWith("--")).toList();
     var workdir = Path.of("").toAbsolutePath();
-    var export = workdir.resolve(Build.FILE);
+    var export = workdir.resolve(Build.EXPORT);
     if (!Files.exists(export) || Build.read(export).stale()) {
       Maven.export(workdir, version());
     }

@@ -43,7 +43,7 @@ final class Maven {
     run(workdir, "-o", "resources:resources", "resources:testResources");
   }
 
-  /** Writes {@link Build#FILE} with this version of the Maven plugin. */
+  /** Writes {@link Build#EXPORT} with this version of the Maven plugin. */
   static void export(Path workdir, String version) {
     run(workdir, "com.rethinkj.test:rethinkj-test-maven-plugin:" + version + ":export");
   }

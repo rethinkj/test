@@ -54,7 +54,7 @@ class WarmRunnerTest {
     var classPath = new ArrayList<>(Project.junit());
     classPath.addAll(List.of(classes, testClasses));
     return new Build(
-        project.resolve(Build.FILE),
+        project.resolve(Build.EXPORT),
         project,
         classPath,
         classes,

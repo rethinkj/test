@@ -47,7 +47,7 @@ record Build(
     List<Path> poms) {
 
   /** Where the adapter writes the file, relative to the module's folder. */
-  static final Path FILE = Path.of("target", "rethinkj-test", "project.properties");
+  static final Path EXPORT = Path.of("target", "rethinkj-test", "project.properties");
 
   static Build read(Path file) {
     var values = new Properties();

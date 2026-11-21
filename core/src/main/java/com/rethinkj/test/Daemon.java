@@ -53,11 +53,12 @@ public final class Daemon {
   private static void serve(Build build, WarmRunner runner, Path socket) throws IOException {
     var stamp = Build.stamp(build.file());
     var lastUsed = new AtomicLong(System.nanoTime());
-    Thread.ofPlatform().daemon().name("rethinkj-test idle").start(() -> {
+    Thread.ofVirtual().name("rethinkj-test idle").start(() -> {
       while (true) {
         try {
           Thread.sleep(TimeUnit.MINUTES.toMillis(1));
         } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
           return;
         }
         if (System.nanoTime() - lastUsed.get() > TimeUnit.MINUTES.toNanos(IDLE_MINUTES)) {
