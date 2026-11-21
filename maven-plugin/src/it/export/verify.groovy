@@ -10,3 +10,6 @@ assert new File(values['testResources']).canonicalPath == new File(basedir, 'src
 assert values['classpath'].contains('junit-jupiter-api-6.1.3.jar')
 assert values['launcher'].endsWith('junit-platform-launcher-6.1.3.jar')
 assert new File(values['launcher']).isFile()
+assert !values['compileClasspath'].contains('junit')
+assert values['test.includes'] == null
+assert values['format'] == '1'

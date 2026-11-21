@@ -26,4 +26,22 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <artifactId>maven-jar-plugin</artifactId>
+        <configuration>
+          <archive>
+            <manifest>
+              <!-- java -jar runs the client, which needs nothing but the JDK. -->
+              <mainClass>com.rethinkj.test.Main</mainClass>
+              <!-- The version, with which the client calls the Maven plugin of the same release. -->
+              <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
 </project>

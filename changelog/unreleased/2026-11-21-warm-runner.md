@@ -1,0 +1,1 @@
+- Added the warm runner: `java -jar rethinkj-test-core.jar` in a Maven module compiles what changed and runs the tests in a JVM that stays running between runs, and prints the report for agents.
