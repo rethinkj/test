@@ -160,12 +160,15 @@ public final class AgentReport implements TestExecutionListener {
     }
   }
 
-  /** The tests in what was skipped or aborted: the test itself, or those of a class. */
+  /** Counts the test, or the tests of a class, that have not been counted yet. */
   private int tests(TestIdentifier test) {
-    return test.isTest()
-        ? 1
-        : (int)
-            plan.getDescendants(test).stream().filter(TestIdentifier::isTest).count();
+    if (test.isTest()) {
+      return counted.add(test.getUniqueId()) ? 1 : 0;
+    }
+    return (int) plan.getDescendants(test).stream()
+        .filter(TestIdentifier::isTest)
+        .filter(descendant -> counted.add(descendant.getUniqueId()))
+        .count();
   }
 
   private Json failure(TestIdentifier test, Throwable error) {
